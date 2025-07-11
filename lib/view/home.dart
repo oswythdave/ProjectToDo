@@ -23,6 +23,7 @@ class _MyHomePageState extends State<MyHomePage> {
   String selectedCategory = 'Pribadi';
   String filter = 'All';
   bool isCalendarView = false;
+  bool showBadge = true;
   DateTime selectedDate = DateTime.now();
   DateTime? selectedTodoDate;
   TimeOfDay? selectedTime;
@@ -40,13 +41,17 @@ class _MyHomePageState extends State<MyHomePage> {
     if (todo != null) {
       titleController.text = todo.title;
       descriptionController.text = todo.description ?? '';
+      notesController.text = todo.notes ?? '';
       selectedPriority = todo.priority ?? priorities[0];
+      selectedCategory = todo.category ?? categories[0];
       selectedTodoDate = todo.date ?? DateTime.now();
       selectedTime = TimeOfDay.fromDateTime(todo.date ?? DateTime.now());
     } else {
       titleController.clear();
       descriptionController.clear();
+      notesController.clear();
       selectedPriority = priorities[0];
+      selectedCategory = categories[0];
       selectedTodoDate = date ?? DateTime.now();
       selectedTime = TimeOfDay.now();
     }
@@ -74,6 +79,37 @@ class _MyHomePageState extends State<MyHomePage> {
                             'Description (e.g. checklist, catatan, deadline)',
                       ),
                       maxLines: 3,
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: notesController,
+                      decoration: const InputDecoration(
+                        labelText: 'Notes (opsional)',
+                        border: OutlineInputBorder(),
+                      ),
+                      maxLines: 2,
+                    ),
+                    const SizedBox(height: 10),
+                    DropdownButtonFormField<String>(
+                      value: selectedCategory,
+                      decoration: const InputDecoration(
+                        labelText: 'Kategori',
+                        border: OutlineInputBorder(),
+                      ),
+                      items:
+                          categories
+                              .map(
+                                (cat) => DropdownMenuItem(
+                                  value: cat,
+                                  child: Text(cat),
+                                ),
+                              )
+                              .toList(),
+                      onChanged: (value) {
+                        setState(() {
+                          selectedCategory = value!;
+                        });
+                      },
                     ),
                     const SizedBox(height: 10),
                     DropdownButtonFormField<String>(
@@ -149,6 +185,7 @@ class _MyHomePageState extends State<MyHomePage> {
                     Navigator.pop(context);
                     titleController.clear();
                     descriptionController.clear();
+                    notesController.clear();
                   },
                   child: const Text('Cancel'),
                 ),
@@ -157,6 +194,7 @@ class _MyHomePageState extends State<MyHomePage> {
                     if (titleController.text.isNotEmpty) {
                       final title = titleController.text;
                       final desc = descriptionController.text;
+                      final notes = notesController.text;
                       final date = DateTime(
                         selectedTodoDate!.year,
                         selectedTodoDate!.month,
@@ -165,40 +203,27 @@ class _MyHomePageState extends State<MyHomePage> {
                         selectedTime?.minute ?? 0,
                       );
 
+                      final todoObj = Todo(
+                        id: todo?.id ?? const Uuid().v4(),
+                        title: title,
+                        description: desc,
+                        priority: selectedPriority,
+                        date: date,
+                        isDone: todo?.isDone ?? false,
+                        notes: notes,
+                        category: selectedCategory,
+                      );
+
                       if (todo == null) {
-                        context.read<TodoBloc>().add(
-                          AddTodo(
-                            Todo(
-                              id: const Uuid().v4(),
-                              title: title,
-                              description: desc,
-                              priority: selectedPriority,
-                              date: date,
-                              notes: '',
-                              category: '',
-                            ),
-                          ),
-                        );
+                        context.read<TodoBloc>().add(AddTodo(todoObj));
                       } else {
-                        context.read<TodoBloc>().add(
-                          UpdateTodo(
-                            Todo(
-                              id: todo.id,
-                              title: title,
-                              description: desc,
-                              priority: selectedPriority,
-                              isDone: todo.isDone,
-                              date: date,
-                              notes: '',
-                              category: '',
-                            ),
-                          ),
-                        );
+                        context.read<TodoBloc>().add(UpdateTodo(todoObj));
                       }
 
                       Navigator.pop(context);
                       titleController.clear();
                       descriptionController.clear();
+                      notesController.clear();
                     }
                   },
                   child: Text(todo == null ? 'Add' : 'Update'),
@@ -209,6 +234,18 @@ class _MyHomePageState extends State<MyHomePage> {
         );
       },
     );
+  }
+
+  String getCountdownText(DateTime deadline) {
+    final now = DateTime.now();
+    final diff = deadline.difference(now);
+    if (diff.isNegative) {
+      return "Sudah lewat deadline";
+    } else {
+      final hours = diff.inHours;
+      final minutes = diff.inMinutes % 60;
+      return "Sisa waktu: ${hours} jam ${minutes} menit";
+    }
   }
 
   Color getPriorityColor(String? priority) {
@@ -238,61 +275,124 @@ class _MyHomePageState extends State<MyHomePage> {
                   todo.date?.day == selectedDate.day &&
                   todo.date?.month == selectedDate.month &&
                   todo.date?.year == selectedDate.year;
-              return sameDate &&
-                  (todo.title.toLowerCase().contains(query) ||
-                      (todo.description?.toLowerCase().contains(query) ??
-                          false) ||
-                      (todo.priority?.toLowerCase().contains(query) ?? false) ||
-                      (todo.category?.toLowerCase().contains(query) ?? false));
+              final matchQuery =
+                  todo.title.toLowerCase().contains(query) ||
+                  (todo.description?.toLowerCase().contains(query) ?? false) ||
+                  (todo.priority?.toLowerCase().contains(query) ?? false);
+              return (sameDate ||
+                      (todo.date?.isAfter(DateTime.now()) ?? false)) &&
+                  matchQuery;
             }).toList();
 
-        if (filtered.isEmpty) {
-          return const Center(child: Text('Tidak ada data'));
-        }
+        int completedCount = filtered.where((t) => t.isDone).length;
+        double progress =
+            filtered.isEmpty ? 0 : completedCount / filtered.length;
 
-        return ListView.builder(
-          itemCount: filtered.length,
-          itemBuilder: (context, index) {
-            final todo = filtered[index];
-            return ListTile(
-              tileColor: getPriorityColor(todo.priority),
-              leading: Checkbox(
-                value: todo.isDone,
-                onChanged:
-                    (val) => context.read<TodoBloc>().add(
-                      ToggleTodoStatus(todo.id, val!),
-                    ),
-              ),
-              title: Text(todo.title),
-              subtitle: Column(
+        return Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (todo.description != null) Text(todo.description!),
-                  if (todo.priority != null)
-                    Text('Prioritas: ${todo.priority}'),
-                  if (todo.category != null) Text('Kategori: ${todo.category}'),
-                  if (todo.date != null)
-                    Text(
-                      'Tanggal: ${todo.date!.day}/${todo.date!.month}/${todo.date!.year}',
-                    ),
+                  const Text("Progress Hari Ini:"),
+                  const SizedBox(height: 6),
+                  LinearProgressIndicator(
+                    value: progress,
+                    backgroundColor: Colors.grey.shade300,
+                    color: Colors.blueAccent,
+                    minHeight: 10,
+                  ),
+                  const SizedBox(height: 4),
+                  Text("${(progress * 100).toStringAsFixed(0)}% selesai"),
                 ],
               ),
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.edit),
-                    onPressed: () => showTodoDialog(todo: todo),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.delete),
-                    onPressed:
-                        () => context.read<TodoBloc>().add(DeleteTodo(todo.id)),
-                  ),
-                ],
-              ),
-            );
-          },
+            ),
+            Expanded(
+              child:
+                  filtered.isEmpty
+                      ? const Center(child: Text('Tidak ada data'))
+                      : ListView.builder(
+                        itemCount: filtered.length,
+                        itemBuilder: (context, index) {
+                          final todo = filtered[index];
+                          return Container(
+                            margin: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 6,
+                            ),
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: getPriorityColor(todo.priority),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Checkbox(
+                                          value: todo.isDone,
+                                          onChanged: (val) {
+                                            context.read<TodoBloc>().add(
+                                              ToggleTodoStatus(todo.id, val!),
+                                            );
+                                          },
+                                        ),
+                                        Text(
+                                          todo.title,
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 16,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    Row(
+                                      children: [
+                                        IconButton(
+                                          icon: const Icon(Icons.edit),
+                                          onPressed:
+                                              () => showTodoDialog(todo: todo),
+                                        ),
+                                        IconButton(
+                                          icon: const Icon(Icons.delete),
+                                          onPressed:
+                                              () => context
+                                                  .read<TodoBloc>()
+                                                  .add(DeleteTodo(todo.id)),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 4),
+                                if (todo.description != null &&
+                                    todo.description!.isNotEmpty)
+                                  Text('Deskripsi: ${todo.description!}'),
+                                if (todo.notes != null &&
+                                    todo.notes!.isNotEmpty)
+                                  Text('Catatan: ${todo.notes!}'),
+                                if (todo.priority != null)
+                                  Text('Prioritas: ${todo.priority!}'),
+                                if (todo.category != null)
+                                  Text('Kategori: ${todo.category!}'),
+                                if (todo.date != null)
+                                  Text(
+                                    'Tanggal: ${todo.date!.day}/${todo.date!.month}/${todo.date!.year}  '
+                                    'Jam: ${todo.date!.hour.toString().padLeft(2, '0')}:${todo.date!.minute.toString().padLeft(2, '0')}',
+                                  ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+            ),
+          ],
         );
       },
     );
@@ -437,7 +537,7 @@ class _MyHomePageState extends State<MyHomePage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Aure Plan Todo List App'),
+        title: const Text('QuickPlan Todo List App'),
         actions: [
           IconButton(
             icon: Icon(isCalendarView ? Icons.list : Icons.calendar_today),
